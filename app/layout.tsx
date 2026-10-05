@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next"
 import type React from "react"
 import { AppHeader } from "@/components/app-header"
+import { BottomNav } from "@/components/bottom-nav"
 import { ThemeProvider } from "@/components/theme-provider"
 import { QueryProvider } from "@/components/query-provider"
 import { APP_TITLE, LOGO_SRC } from "@/lib/constants"
@@ -31,7 +32,8 @@ export default function RootLayout({
         <ThemeProvider>
           <QueryProvider>
             <AppHeader />
-            {children}
+            <main className="mx-auto w-full max-w-md px-4 pt-6 pb-24">{children}</main>
+            <BottomNav />
           </QueryProvider>
         </ThemeProvider>
       </body>

@@ -1,75 +1,88 @@
 /**
- * GET  /api/meals         — the current user's meals for the last 7 days.
- * POST /api/meals         — save a confirmed analysis (JSON: imagePath, analysis, portionFactor).
- * DELETE /api/meals?id=…  — delete one of the current user's meals.
+ * GET  /api/meals?from=ISO&to=ISO — the current user's meals in [from, to), newest first
+ *      (defaults to the last 7 days). Soft-deleted meals are excluded.
+ * POST /api/meals — save a confirmed analysis
+ *      (JSON: imagePath, analysis, portionFactor, mealType?, note?).
  */
 
+import { randomUUID } from "crypto"
 import { querySnowflake } from "@/lib/snowflake"
 import { getConfig } from "@/lib/config"
-import { currentUser } from "@/lib/user"
-import { sumMacros, type Meal, type MealAnalysis } from "@/lib/nutrition"
+import { errorResponse, getCurrentUser } from "@/lib/auth"
+import { isMealType, MEAL_COLUMNS, toMeal } from "@/lib/meals"
+import { sumMacros, type MealAnalysis } from "@/lib/nutrition"
 
 export const dynamic = "force-dynamic"
 
-function toIso(val: unknown): string {
-  return val instanceof Date ? val.toISOString() : String(val)
+const IMAGE_PATH = /^[A-Za-z0-9-]+\/[A-Za-z0-9-]+\.(jpg|png|webp)$/
+
+function parseDate(value: string | null, fallback: Date): Date {
+  const d = value ? new Date(value) : fallback
+  return Number.isNaN(d.getTime()) ? fallback : d
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const user = await getCurrentUser()
+    const params = new URL(req.url).searchParams
+    const now = new Date()
+    const to = parseDate(params.get("to"), now)
+    const from = parseDate(params.get("from"), new Date(to.getTime() - 7 * 86_400_000))
+
     const { mealsTable } = getConfig()
     const rows = await querySnowflake(
-      `SELECT ID, CREATED_AT, PLAT, PORTION_FACTOR, KCAL, PROTEINES_G, GLUCIDES_G, LIPIDES_G, CONFIANCE
-         FROM ${mealsTable}
-        WHERE USER_NAME = ? AND CREATED_AT >= DATEADD(day, -7, CURRENT_TIMESTAMP())
+      `SELECT ${MEAL_COLUMNS} FROM ${mealsTable}
+        WHERE USER_ID = ? AND DELETED_AT IS NULL
+          AND CREATED_AT >= TO_TIMESTAMP_LTZ(?) AND CREATED_AT < TO_TIMESTAMP_LTZ(?)
         ORDER BY CREATED_AT DESC`,
-      { binds: [await currentUser()] },
+      { binds: [user.userId, from.toISOString(), to.toISOString()] },
     )
-    const meals: Meal[] = rows.map((r) => ({
-      id: r.ID,
-      createdAt: toIso(r.CREATED_AT),
-      plat: r.PLAT,
-      portionFactor: Number(r.PORTION_FACTOR),
-      kcal: Number(r.KCAL),
-      proteines: Number(r.PROTEINES_G),
-      glucides: Number(r.GLUCIDES_G),
-      lipides: Number(r.LIPIDES_G),
-      confiance: r.CONFIANCE,
-    }))
-    return Response.json(meals)
+    return Response.json(rows.map(toMeal))
   } catch (e) {
-    console.error(new Date().toISOString(), "[meals] list failed", e)
-    return Response.json({ error: e instanceof Error ? e.message : "Erreur" }, { status: 500 })
+    return errorResponse("meals", e)
   }
 }
 
 export async function POST(req: Request) {
   try {
+    const user = await getCurrentUser()
     const body = (await req.json()) as {
       imagePath?: string
       analysis?: MealAnalysis
       portionFactor?: number
+      mealType?: unknown
+      note?: unknown
     }
     const { imagePath, analysis } = body
     const factor = Number(body.portionFactor ?? 1)
-    if (!imagePath || !analysis || !Array.isArray(analysis.aliments)) {
+    if (!imagePath || !IMAGE_PATH.test(imagePath) || !imagePath.startsWith(`${user.userId}/`)) {
+      return Response.json({ error: "Photo invalide" }, { status: 400 })
+    }
+    if (!analysis || !Array.isArray(analysis.aliments)) {
       return Response.json({ error: "Requête invalide" }, { status: 400 })
     }
     if (!(factor >= 0.25 && factor <= 3)) {
       return Response.json({ error: "Facteur de portion hors limites" }, { status: 400 })
     }
+    const mealType = isMealType(body.mealType) ? body.mealType : null
+    const note = typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 500) : null
 
-    const { mealsTable } = getConfig()
+    const { mealsTable, itemsTable } = getConfig()
+    const mealId = randomUUID()
     const totals = sumMacros(analysis.aliments, factor)
     await querySnowflake(
       `INSERT INTO ${mealsTable}
-         (USER_NAME, IMAGE_PATH, PLAT, PORTION_FACTOR, KCAL, PROTEINES_G, GLUCIDES_G, LIPIDES_G, CONFIANCE, ANALYSIS)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, PARSE_JSON(?)`,
+         (ID, USER_ID, IMAGE_PATH, PLAT, MEAL_TYPE, NOTE, PORTION_FACTOR,
+          KCAL, PROTEINES_G, GLUCIDES_G, LIPIDES_G, CONFIANCE, ANALYSIS)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, PARSE_JSON(?)`,
       {
         binds: [
-          await currentUser(),
+          mealId,
+          user.userId,
           imagePath,
           analysis.plat,
+          mealType,
+          note,
           factor,
           totals.kcal,
           totals.proteines,
@@ -80,24 +93,18 @@ export async function POST(req: Request) {
         ],
       },
     )
-    return Response.json({ ok: true })
+    // Per-food rows, scaled by the chosen portion.
+    await querySnowflake(
+      `INSERT INTO ${itemsTable}
+         (MEAL_ID, POSITION, NOM, PORTION_G, KCAL, PROTEINES_G, GLUCIDES_G, LIPIDES_G)
+       SELECT ?, f.INDEX, f.VALUE:nom::VARCHAR,
+              f.VALUE:portion_g::FLOAT * ?, ROUND(f.VALUE:kcal::FLOAT * ?),
+              f.VALUE:proteines_g::FLOAT * ?, f.VALUE:glucides_g::FLOAT * ?, f.VALUE:lipides_g::FLOAT * ?
+         FROM TABLE(FLATTEN(input => PARSE_JSON(?))) f`,
+      { binds: [mealId, factor, factor, factor, factor, factor, JSON.stringify(analysis.aliments)] },
+    )
+    return Response.json({ ok: true, id: mealId })
   } catch (e) {
-    console.error(new Date().toISOString(), "[meals] save failed", e)
-    return Response.json({ error: e instanceof Error ? e.message : "Erreur" }, { status: 500 })
-  }
-}
-
-export async function DELETE(req: Request) {
-  try {
-    const id = new URL(req.url).searchParams.get("id")
-    if (!id) return Response.json({ error: "id manquant" }, { status: 400 })
-    const { mealsTable } = getConfig()
-    await querySnowflake(`DELETE FROM ${mealsTable} WHERE ID = ? AND USER_NAME = ?`, {
-      binds: [id, await currentUser()],
-    })
-    return Response.json({ ok: true })
-  } catch (e) {
-    console.error(new Date().toISOString(), "[meals] delete failed", e)
-    return Response.json({ error: e instanceof Error ? e.message : "Erreur" }, { status: 500 })
+    return errorResponse("meals", e)
   }
 }

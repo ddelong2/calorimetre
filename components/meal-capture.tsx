@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { sumMacros, type AnalyzeResponse } from "@/lib/nutrition"
+import { mealTypeForHour, MEAL_TYPES, sumMacros, type AnalyzeResponse, type MealType } from "@/lib/nutrition"
 
 const MAX_DIMENSION = 1280
 const PORTIONS = [
@@ -45,7 +45,8 @@ export function MealCapture() {
   const queryClient = useQueryClient()
   const [preview, setPreview] = useState<string | null>(null)
   const [factor, setFactor] = useState(1)
-
+  const [mealType, setMealType] = useState<MealType>(() => mealTypeForHour(new Date().getHours()))
+  const [note, setNote] = useState("")
   const analyze = useMutation({
     mutationFn: async (file: File): Promise<AnalyzeResponse> => {
       const form = new FormData()
@@ -61,12 +62,13 @@ export function MealCapture() {
       const res = await fetch("/api/meals", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...result, portionFactor: factor }),
+        body: JSON.stringify({ ...result, portionFactor: factor, mealType, note }),
       })
       if (!res.ok) throw new Error(await readError(res))
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["meals"] })
+      queryClient.invalidateQueries({ queryKey: ["stats"] })
       reset()
     },
   })
@@ -78,6 +80,8 @@ export function MealCapture() {
     if (preview) URL.revokeObjectURL(preview)
     setPreview(URL.createObjectURL(file))
     setFactor(1)
+    setMealType(mealTypeForHour(new Date().getHours()))
+    setNote("")
     save.reset()
     analyze.mutate(file)
   }
@@ -198,6 +202,30 @@ export function MealCapture() {
                 </ul>
               </details>
             )}
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Repas</div>
+              <div className="grid grid-cols-2 gap-2">
+                {(Object.keys(MEAL_TYPES) as MealType[]).map((t) => (
+                  <Button
+                    key={t}
+                    type="button"
+                    size="sm"
+                    variant={mealType === t ? "default" : "outline"}
+                    onClick={() => setMealType(t)}
+                  >
+                    {MEAL_TYPES[t]}
+                  </Button>
+                ))}
+              </div>
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                maxLength={500}
+                placeholder="Note (optionnel)"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </div>
 
             {save.isError && (
               <Alert variant="destructive">

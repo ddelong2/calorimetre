@@ -10,7 +10,7 @@ import os from "os"
 import path from "path"
 import { querySnowflake, querySnowflakeLongRunning } from "@/lib/snowflake"
 import { getConfig } from "@/lib/config"
-import { currentUser } from "@/lib/user"
+import { errorResponse, getCurrentUser } from "@/lib/auth"
 import { ANALYSIS_PROMPT, RESPONSE_FORMAT_SQL, type MealAnalysis } from "@/lib/nutrition"
 
 export const dynamic = "force-dynamic"
@@ -25,6 +25,7 @@ const EXTENSIONS: Record<string, string> = {
 export async function POST(req: Request) {
   let tmpFile: string | null = null
   try {
+    const user = await getCurrentUser()
     const form = await req.formData()
     const image = form.get("image")
     if (!(image instanceof File)) {
@@ -39,7 +40,8 @@ export async function POST(req: Request) {
     }
 
     const { model, stage } = getConfig()
-    const userFolder = (await currentUser()).replace(/[^A-Za-z0-9_]/g, "_")
+    // Photos live under the user's internal id (a UUID), never under a user-supplied name.
+    const userFolder = user.userId.replace(/[^A-Za-z0-9-]/g, "")
     const fileName = `${randomUUID()}.${ext}`
     const relativePath = `${userFolder}/${fileName}`
 
@@ -61,11 +63,7 @@ export async function POST(req: Request) {
 
     return Response.json({ imagePath: relativePath, analysis })
   } catch (e) {
-    console.error(new Date().toISOString(), "[analyze] failed", e)
-    return Response.json(
-      { error: e instanceof Error ? e.message : "Analyse impossible" },
-      { status: 500 },
-    )
+    return errorResponse("analyze", e)
   } finally {
     if (tmpFile) await fs.rm(tmpFile, { force: true }).catch(() => {})
   }

@@ -24,16 +24,47 @@ export interface AnalyzeResponse {
   analysis: MealAnalysis
 }
 
+export const MEAL_TYPES = {
+  petit_dejeuner: "Petit-déjeuner",
+  dejeuner: "Déjeuner",
+  diner: "Dîner",
+  collation: "Collation",
+} as const
+
+export type MealType = keyof typeof MEAL_TYPES
+
+/** Default meal type for a given local hour. */
+export function mealTypeForHour(hour: number): MealType {
+  if (hour >= 5 && hour < 11) return "petit_dejeuner"
+  if (hour >= 11 && hour < 15) return "dejeuner"
+  if (hour >= 18 && hour < 23) return "diner"
+  return "collation"
+}
+
 export interface Meal {
   id: string
   createdAt: string
   plat: string
+  mealType: MealType | null
+  note: string | null
   portionFactor: number
   kcal: number
   proteines: number
   glucides: number
   lipides: number
   confiance: string
+  hasPhoto: boolean
+}
+
+export interface MealDetail extends Meal {
+  items: FoodItem[]
+  incertitudes: string[]
+}
+
+export interface DayStat {
+  day: string // YYYY-MM-DD, in the caller's time zone
+  kcal: number
+  meals: number
 }
 
 export const ANALYSIS_PROMPT =
