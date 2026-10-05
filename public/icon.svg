@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Calorimètre">
+  <rect width="64" height="64" rx="14" fill="#0a2f5a"/>
+  <circle cx="32" cy="34" r="19" fill="#ffffff"/>
+  <circle cx="32" cy="34" r="13" fill="none" stroke="#29b5e8" stroke-width="2.5"/>
+  <path d="M32 34 L40 26" stroke="#0a2f5a" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="32" cy="34" r="2.5" fill="#0a2f5a"/>
+  <path d="M14 10 v10 M11 10 v6 a3 3 0 0 0 6 0 v-6" stroke="#29b5e8" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M50 10 c-4 2 -4 9 0 10 v0" stroke="#29b5e8" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M50 10 v10" stroke="#29b5e8" stroke-width="2" stroke-linecap="round"/>
+</svg>
